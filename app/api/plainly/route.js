@@ -82,42 +82,61 @@ export async function POST(request) {
 
   const { system, user } = buildPrompt(mode, level, lang, text.trim());
 
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+  const payload = JSON.stringify({
+    systemInstruction: { parts: [{ text: system }] },
+    contents: [{ role: "user", parts: [{ text: user }] }],
+    generationConfig: { maxOutputTokens: 4000 },
+  });
+
+  // Gemini's free tier occasionally returns 503 (overloaded) or 429 (rate
+  // limited). Both are transient, so retry a couple of times with a short
+  // backoff before giving up — a demo shouldn't fail on a blip.
+  const MAX_ATTEMPTS = 3;
+  let lastStatus = null;
+
   try {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payload,
+      });
 
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: system }] },
-        contents: [{ role: "user", parts: [{ text: user }] }],
-        generationConfig: { maxOutputTokens: 4000 },
-      }),
-    });
+      if (res.ok) {
+        const data = await res.json();
+        const resultText = (data.candidates?.[0]?.content?.parts || [])
+          .map((p) => p.text || "")
+          .join("\n")
+          .trim();
 
-    if (!res.ok) {
+        if (!resultText) {
+          return Response.json(
+            { error: "The AI returned an empty response. Try rephrasing or shortening the text." },
+            { status: 502 }
+          );
+        }
+
+        return Response.json({ text: resultText });
+      }
+
+      lastStatus = res.status;
       const errText = await res.text();
-      console.error(`[plainly] Gemini API error ${res.status}:`, errText);
-      return Response.json(
-        { error: "The AI service is temporarily unavailable. Please try again in a moment." },
-        { status: 502 }
-      );
+      console.error(`[plainly] Gemini API error ${res.status} (attempt ${attempt}/${MAX_ATTEMPTS}):`, errText);
+
+      const isTransient = res.status === 503 || res.status === 429 || res.status >= 500;
+      if (!isTransient || attempt === MAX_ATTEMPTS) break;
+
+      // Wait a bit longer between each attempt: 600ms, then 1400ms.
+      await new Promise((r) => setTimeout(r, attempt === 1 ? 600 : 1400));
     }
 
-    const data = await res.json();
-    const resultText = (data.candidates?.[0]?.content?.parts || [])
-      .map((p) => p.text || "")
-      .join("\n")
-      .trim();
+    const message =
+      lastStatus === 503 || lastStatus === 429
+        ? "The AI service is busy right now. Please try again in a few seconds."
+        : "The AI service is temporarily unavailable. Please try again in a moment.";
 
-    if (!resultText) {
-      return Response.json(
-        { error: "Gemini returned an empty response. Try rephrasing or shortening the text." },
-        { status: 502 }
-      );
-    }
-
-    return Response.json({ text: resultText });
+    return Response.json({ error: message }, { status: 502 });
   } catch (err) {
     console.error("[plainly] Unexpected server error:", err);
     return Response.json({ error: "Something went wrong on our end. Please try again." }, { status: 500 });
