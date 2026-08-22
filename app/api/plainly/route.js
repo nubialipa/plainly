@@ -11,6 +11,8 @@ const MODEL_CHAIN = [
 
 const VALID_MODES = ["simplify", "translate", "explain", "highlight"];
 const VALID_LEVELS = ["simple", "very_simple"];
+const VALID_UI_LANGS = { en: "English", id: "Indonesian" };
+
 const VALID_LANGS = [
   "English",
   "Indonesian",
@@ -140,25 +142,28 @@ function validateHighlights(rawJson, originalText) {
 // The prompt/system-instruction logic lives ONLY on the server.
 // The browser can never send or override the system prompt directly —
 // it only picks from a fixed, validated set of mode/level/lang options.
-function buildPrompt(mode, level, lang, text) {
+function buildPrompt(mode, level, lang, text, readerLang) {
   const wrapped = wrapUserText(text);
 
   if (mode === "highlight") {
     return {
-      system: `You find the parts of a document that make it hard for an ordinary person to understand — jargon, technical terms, acronyms, institutional abbreviations, archaic legal phrases, and words whose everyday meaning differs from their meaning here.
+      system: `OUTPUT LANGUAGE: Write every "explanation" in ${readerLang}. This is fixed. The document may be in a different language — that does not matter. Explanations are always in ${readerLang}.${readerLang === "Indonesian" ? " Use standard Bahasa Indonesia, not Malay." : ""}
+
+You find the parts of a document that make it hard for an ordinary person to understand — jargon, technical terms, acronyms, institutional abbreviations, archaic legal phrases, and words whose everyday meaning differs from their meaning here.
 
 Return ONLY a JSON object, with no code fences, no commentary, and nothing before or after it:
 
-{"highlights":[{"phrase":"exact text copied from the document","explanation":"short plain-language explanation"}]}
+{"highlights":[{"phrase":"exact text copied from the document","explanation":"short explanation written in ${readerLang}"}]}
 
 Rules:
 - Choose the 3 to 6 hardest items only. Fewer is better than padding with easy words.
-- "phrase" MUST be copied character-for-character from the document, exactly as it appears there — same spelling, same capitalisation, same punctuation. Do not paraphrase, expand, trim, or correct it. If you cannot copy it exactly, leave that item out.
+- "phrase" MUST be copied character-for-character from the document, exactly as it appears there — same spelling, same capitalisation, same punctuation, same language. Do not paraphrase, translate, expand, trim, or correct it. If you cannot copy it exactly, leave that item out.
 - Keep each phrase short: a single term or a few words, never a whole sentence.
-- "explanation" must be one short sentence a beginner understands. Explain only what the term means. Never add facts, causes, judgements, or advice that are not in the document.
+- "explanation" must be one short sentence a beginner understands, written in ${readerLang}. Explain only what the term means. Never add facts, causes, judgements, or advice that are not in the document.
 - Never change how certain something is. Preserve words like "alleged" or "suspected".
-- Write explanations in the same language as the document; when that language is Indonesian, use standard Bahasa Indonesia — not Malay.
 - Do not include the document markers in any phrase.
+
+To be explicit: "phrase" stays in the document's original language, "explanation" is always in ${readerLang}.
 
 ${INJECTION_GUARD}`,
       user: wrapped,
@@ -171,11 +176,15 @@ ${INJECTION_GUARD}`,
         ? "Use very short sentences, everyday words a 10-year-old would know, and avoid all jargon. Aim for maximum simplicity even if it means splitting into multiple short sentences."
         : "Use clear, plain everyday language while keeping all essential meaning and important details.";
     return {
-      system: `You rewrite complex, formal, or bureaucratic text into plain, easy-to-understand language. ${levelDesc}
+      system: `OUTPUT LANGUAGE: Write your entire output in ${readerLang}. This is fixed. The source document may be in a different language — if so, render the plain-language version in ${readerLang} anyway.${readerLang === "Indonesian" ? " Use standard Bahasa Indonesia, not Malay." : ""}
+
+You rewrite complex, formal, or bureaucratic text into plain, easy-to-understand language. ${levelDesc}
 
 Critical rule: never change the actual meaning. You must preserve, exactly as given, every: number, amount, date, deadline, obligation ("must", "shall", "required to"), prohibition ("must not", "cannot", "forbidden"), condition ("if... then..."), and named entity (people, organizations, article/clause references). Simplify the sentence structure and vocabulary around these facts, never the facts themselves. If something is ambiguous in the original, keep it just as ambiguous rather than guessing.
 
-Keep the same language the input is written in (do not translate). When the input is Indonesian, use standard Bahasa Indonesia — not Malay. Do not add commentary, headers, warnings, or explanations — output ONLY the rewritten plain-language text, without the document markers.
+Proper nouns, official titles, and document references (for example law article numbers, case numbers, institution names) keep their original form even when the rest is rendered in ${readerLang}.
+
+Do not add commentary, headers, warnings, or explanations — output ONLY the rewritten plain-language text, without the document markers.
 
 ${INJECTION_GUARD}`,
       user: wrapped,
@@ -190,7 +199,9 @@ ${INJECTION_GUARD}`,
     };
   }
   return {
-    system: `You explain confusing, technical, legal, or jargon-heavy text so an average person understands it. Identify the hard terms or confusing parts and explain them simply, then give a one-line plain-language summary of what the whole passage means. Keep it concise.
+    system: `OUTPUT LANGUAGE: Write your entire response in ${readerLang}. This is fixed. The document may be in a different language — that does not matter, your explanation is always in ${readerLang}.${readerLang === "Indonesian" ? " Use standard Bahasa Indonesia, not Malay." : ""} You may quote a technical term in its original form, but everything you write around it is in ${readerLang}.
+
+You explain confusing, technical, legal, or jargon-heavy text so an average person understands it. Identify the hard terms or confusing parts and explain them simply, then give a one-line plain-language summary of what the whole passage means. Keep it concise.
 
 Strict grounding rules:
 - Explain ONLY what the document says, plus the general meaning of terms it uses. Never add facts, context, history, or background that isn't in the document.
@@ -199,7 +210,7 @@ Strict grounding rules:
 - Never add advice, recommendations, or next steps that aren't in the document.
 - If part of the text is unclear or incomplete, say so plainly rather than filling the gap.
 
-Respond in the same language as the input; when that language is Indonesian, use standard Bahasa Indonesia — not Malay. Use plain text formatting: you may use **bold** for term names and "- " for list items, but do not use italics or headings. Do not include the document markers in your output.
+Use plain text formatting: you may use **bold** for term names and "- " for list items, but do not use italics or headings. Do not include the document markers in your output.
 
 ${INJECTION_GUARD}`,
     user: wrapped,
@@ -230,7 +241,7 @@ export async function POST(request) {
     return Response.json({ error: "Invalid request body." }, { status: 400 });
   }
 
-  const { mode, level, lang, text } = body || {};
+  const { mode, level, lang, text, uiLang } = body || {};
 
   if (!VALID_MODES.includes(mode)) {
     return Response.json({ error: "Invalid or missing 'mode'." }, { status: 400 });
@@ -248,7 +259,13 @@ export async function POST(request) {
     return Response.json({ error: "Text is too long. Please shorten it." }, { status: 400 });
   }
 
-  const { system, user } = buildPrompt(mode, level, lang, text.trim());
+  // The interface language tells us what the reader understands. Explanations
+  // (Highlight, Explain) are written for the reader, so they follow it.
+  // Simplify keeps the document's own language — changing it would be a
+  // translation, which is a different mode.
+  const readerLang = VALID_UI_LANGS[uiLang] || "English";
+
+  const { system, user } = buildPrompt(mode, level, lang, text.trim(), readerLang);
 
   const payload = JSON.stringify({
     systemInstruction: { parts: [{ text: system }] },

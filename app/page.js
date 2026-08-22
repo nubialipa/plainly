@@ -11,6 +11,10 @@ const EXAMPLES = {
     "The Lessee shall indemnify and hold harmless the Lessor from and against any and all claims, damages, losses, and expenses arising out of or resulting from the Lessee's failure to comply with the terms stipulated herein.",
 };
 
+// Matches the server-side cap in /api/plainly. Kept visible in the UI so people
+// find out before they press the button, not after.
+const MAX_CHARS = 20000;
+
 // value = what the API is told; label = what the user sees.
 const LANGUAGES = [
   { value: "English", label: "English" },
@@ -45,6 +49,9 @@ const UI = {
     intoLabel: "Into:",
     placeholder: "Paste complicated text here… for example a contract clause, an official letter, or a medical result.",
     characters: "characters",
+    words: "words",
+    overLimit: (n) => `${n} over the limit — trim it to continue`,
+    nearLimit: "approaching the limit",
     action: "Make it plain →",
     tryLabel: "Try:",
     exLegal: "Legal notice",
@@ -82,6 +89,9 @@ const UI = {
     intoLabel: "Ke:",
     placeholder: "Tempel teks rumit di sini… misalnya klausul kontrak, surat resmi, atau hasil pemeriksaan medis.",
     characters: "karakter",
+    words: "kata",
+    overLimit: (n) => `${n} melebihi batas — kurangi untuk melanjutkan`,
+    nearLimit: "mendekati batas",
     action: "Buat jadi jelas →",
     tryLabel: "Coba:",
     exLegal: "Surat resmi",
@@ -103,6 +113,72 @@ const UI = {
     footerRight: "Prototipe MVP",
   },
 };
+
+// Mode icons. Drawn rather than using emoji, which render differently on every
+// platform and were the one inconsistent element in the interface.
+const ICONS = {
+  highlight: (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M4 14.5 12.5 6l2.5 2.5L6.5 17H4v-2.5Z" fill="currentColor" opacity="0.18" />
+      <path d="M4 14.5 12.5 6l2.5 2.5L6.5 17H4v-2.5Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="m12.5 6 1.75-1.75a1.5 1.5 0 0 1 2.12 0l.38.38a1.5 1.5 0 0 1 0 2.12L15 8.5" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+    </svg>
+  ),
+  simplify: (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M3 5h14M3 10h9M3 15h5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  ),
+  translate: (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <circle cx="10" cy="10" r="7" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M3 10h14M10 3c1.8 2 2.7 4.4 2.7 7S11.8 15 10 17c-1.8-2-2.7-4.4-2.7-7S8.2 5 10 3Z" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  ),
+  explain: (
+    <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <circle cx="9" cy="9" r="5.5" stroke="currentColor" strokeWidth="1.4" />
+      <path d="m13.5 13.5 3 3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <path d="M9 11.2V11c0-.7.4-1.1.9-1.5.5-.4.8-.7.8-1.2a1.7 1.7 0 0 0-3.4 0" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+      <circle cx="9" cy="13.2" r="0.6" fill="currentColor" />
+    </svg>
+  ),
+};
+
+// Logo mark: a document with one line struck through by a highlighter.
+// Vector so it stays crisp at any size, and drawn with the same ink/highlighter
+// palette as the rest of the interface.
+function LogoMark() {
+  return (
+    <svg
+      className="logo-mark"
+      viewBox="0 0 32 32"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+      aria-hidden="true"
+    >
+      {/* back sheet, slightly offset */}
+      <rect
+        x="9" y="3" width="19" height="24" rx="3"
+        fill="var(--white)" stroke="var(--ink)" strokeWidth="1.6"
+      />
+      {/* front sheet */}
+      <rect
+        x="4" y="6" width="19" height="24" rx="3"
+        fill="var(--white)" stroke="var(--ink)" strokeWidth="1.6"
+      />
+      {/* highlighter swipe across the middle line */}
+      <rect
+        x="6.5" y="15" width="14" height="5.5" rx="1"
+        fill="var(--highlighter)"
+      />
+      {/* text lines */}
+      <line x1="8" y1="11" x2="19" y2="11" stroke="var(--ink)" strokeWidth="1.6" strokeLinecap="round" />
+      <line x1="8" y1="17.8" x2="17" y2="17.8" stroke="var(--ink)" strokeWidth="1.6" strokeLinecap="round" />
+      <line x1="8" y1="24.5" x2="15" y2="24.5" stroke="var(--ink)" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
 
 // Renders the light markdown the model tends to produce (headings, bold,
 // bullets, dividers) without pulling in a markdown library.
@@ -309,7 +385,7 @@ export default function Home() {
       const res = await fetch("/api/plainly", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode, level, lang, text }),
+        body: JSON.stringify({ mode, level, lang, text, uiLang }),
       });
       const data = await res.json();
 
@@ -339,6 +415,10 @@ export default function Home() {
     }
   }
 
+  const wordCount = input.trim() ? input.trim().split(/\s+/).length : 0;
+  const overLimit = input.length > MAX_CHARS;
+  const nearLimit = !overLimit && input.length > MAX_CHARS * 0.9;
+
   const outputLabel =
     resultMode === "highlight"
       ? t.labelHighlight
@@ -362,7 +442,7 @@ export default function Home() {
     <div className="wrap">
       <header>
         <div className="logo">
-          <span className="logo-mark"></span>Plainly
+          <LogoMark />Plainly
         </div>
         <div className="header-right">
           <div className="ui-lang-toggle">
@@ -381,12 +461,10 @@ export default function Home() {
               ID
             </button>
           </div>
-          <div className="tagline-small">{t.tagline}</div>
         </div>
       </header>
 
       <div className="hero">
-        <p className="eyebrow">{t.eyebrow}</p>
         <h1>
           {t.headlineA}
           <br />
@@ -398,17 +476,18 @@ export default function Home() {
       <div className="tool">
         <div className="mode-tabs">
           {[
-            { id: "highlight", emoji: "🖍️", label: t.modeHighlight },
-            { id: "simplify", emoji: "🧠", label: t.modeSimplify },
-            { id: "translate", emoji: "🌐", label: t.modeTranslate },
-            { id: "explain", emoji: "🔎", label: t.modeExplain },
+            { id: "highlight", label: t.modeHighlight },
+            { id: "simplify", label: t.modeSimplify },
+            { id: "translate", label: t.modeTranslate },
+            { id: "explain", label: t.modeExplain },
           ].map((m) => (
             <button
               key={m.id}
               className={`mode-tab ${mode === m.id ? "active" : ""}`}
               onClick={() => setMode(m.id)}
             >
-              <span className="emoji">{m.emoji}</span> {m.label}
+              <span className="mode-icon">{ICONS[m.id]}</span>
+              {m.label}
             </button>
           ))}
         </div>
@@ -462,13 +541,20 @@ export default function Home() {
             placeholder={t.placeholder}
           />
           <div className="panel-footer">
-            <span className="char-count">
-              {input.length.toLocaleString()} {t.characters}
+            <span
+              className={`char-count ${
+                overLimit ? "over" : nearLimit ? "near" : ""
+              }`}
+            >
+              {overLimit
+                ? t.overLimit((input.length - MAX_CHARS).toLocaleString())
+                : `${wordCount.toLocaleString()} ${t.words}`}
+              {!overLimit && nearLimit && ` · ${t.nearLimit}`}
             </span>
             <button
               className="go-btn"
               onClick={handleProcess}
-              disabled={loading}
+              disabled={loading || overLimit}
             >
               {loading ? (
                 <span className="spinner"></span>
@@ -566,11 +652,6 @@ export default function Home() {
           </div>
         )}
       </div>
-
-      <footer>
-        <span>{t.footerLeft}</span>
-        <span>{t.footerRight}</span>
-      </footer>
     </div>
   );
 }
