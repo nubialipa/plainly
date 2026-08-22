@@ -8,7 +8,7 @@ without rewriting the meaning out of them.
 [**Live demo**](https://plainly-sepia.vercel.app) · Built for the NeuralSprint
 hackathon
 
-![Plainly](screenshot.png)
+![Plainly](screenshot.PNG)
 
 ---
 
