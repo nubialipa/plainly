@@ -2,7 +2,7 @@
 // Create an API key at https://aistudio.google.com/apikey
 const GEMINI_MODEL = "gemini-3.6-flash";
 
-const VALID_MODES = ["simplify", "translate", "explain"];
+const VALID_MODES = ["simplify", "translate", "explain", "highlight"];
 const VALID_LEVELS = ["simple", "very_simple"];
 const VALID_LANGS = [
   "English",
@@ -61,11 +61,99 @@ function wrapUserText(text) {
   return `<<<DOCUMENT_START>>>\n${text}\n<<<DOCUMENT_END>>>`;
 }
 
+// --- Highlight validation --------------------------------------------------
+// The model proposes phrases; the SERVER decides where (and whether) they are
+// highlighted. Positions are computed here by searching the original text, so a
+// phrase the model invented or altered simply gets dropped. The original text is
+// never modified to accommodate the model.
+const MAX_HIGHLIGHTS = 6;
+const MAX_PHRASE_LENGTH = 60;
+const MAX_EXPLANATION_LENGTH = 300;
+
+function validateHighlights(rawJson, originalText) {
+  let parsed;
+  try {
+    // Strip code fences the model may add despite instructions.
+    const cleaned = rawJson.replace(/```json/gi, "").replace(/```/g, "").trim();
+    const firstBrace = cleaned.indexOf("{");
+    const lastBrace = cleaned.lastIndexOf("}");
+    if (firstBrace === -1 || lastBrace === -1) return [];
+    parsed = JSON.parse(cleaned.slice(firstBrace, lastBrace + 1));
+  } catch {
+    return [];
+  }
+
+  if (!parsed || !Array.isArray(parsed.highlights)) return [];
+
+  const accepted = [];
+  const usedRanges = [];
+
+  for (const item of parsed.highlights) {
+    if (accepted.length >= MAX_HIGHLIGHTS) break;
+    if (!item || typeof item !== "object") continue;
+
+    const phrase = typeof item.phrase === "string" ? item.phrase.trim() : "";
+    const explanation =
+      typeof item.explanation === "string" ? item.explanation.trim() : "";
+
+    if (!phrase || !explanation) continue;
+    if (phrase.length > MAX_PHRASE_LENGTH) continue;
+    if (explanation.length > MAX_EXPLANATION_LENGTH) continue;
+
+    // The phrase must appear verbatim in the original text. Try an exact match
+    // first, then a case-insensitive fallback — but the range always comes from
+    // the original, so what gets highlighted is always the user's own text.
+    let start = originalText.indexOf(phrase);
+    if (start === -1) {
+      const lowerIndex = originalText.toLowerCase().indexOf(phrase.toLowerCase());
+      if (lowerIndex === -1) continue;
+      start = lowerIndex;
+    }
+    const end = start + phrase.length;
+
+    // Skip anything overlapping an already-accepted highlight.
+    if (usedRanges.some((r) => start < r.end && end > r.start)) continue;
+
+    usedRanges.push({ start, end });
+    accepted.push({
+      start,
+      end,
+      phrase: originalText.slice(start, end), // always the original casing
+      explanation,
+    });
+  }
+
+  return accepted.sort((a, b) => a.start - b.start);
+}
+// ---------------------------------------------------------------------------
+
 // The prompt/system-instruction logic lives ONLY on the server.
 // The browser can never send or override the system prompt directly —
 // it only picks from a fixed, validated set of mode/level/lang options.
 function buildPrompt(mode, level, lang, text) {
   const wrapped = wrapUserText(text);
+
+  if (mode === "highlight") {
+    return {
+      system: `You find the parts of a document that make it hard for an ordinary person to understand — jargon, technical terms, acronyms, institutional abbreviations, archaic legal phrases, and words whose everyday meaning differs from their meaning here.
+
+Return ONLY a JSON object, with no code fences, no commentary, and nothing before or after it:
+
+{"highlights":[{"phrase":"exact text copied from the document","explanation":"short plain-language explanation"}]}
+
+Rules:
+- Choose the 3 to 6 hardest items only. Fewer is better than padding with easy words.
+- "phrase" MUST be copied character-for-character from the document, exactly as it appears there — same spelling, same capitalisation, same punctuation. Do not paraphrase, expand, trim, or correct it. If you cannot copy it exactly, leave that item out.
+- Keep each phrase short: a single term or a few words, never a whole sentence.
+- "explanation" must be one short sentence a beginner understands. Explain only what the term means. Never add facts, causes, judgements, or advice that are not in the document.
+- Never change how certain something is. Preserve words like "alleged" or "suspected".
+- Write explanations in the same language as the document; when that language is Indonesian, use standard Bahasa Indonesia — not Malay.
+- Do not include the document markers in any phrase.
+
+${INJECTION_GUARD}`,
+      user: wrapped,
+    };
+  }
 
   if (mode === "simplify") {
     const levelDesc =
@@ -92,7 +180,16 @@ ${INJECTION_GUARD}`,
     };
   }
   return {
-    system: `You explain confusing, technical, legal, or jargon-heavy text so an average person understands it. Identify the hard terms or confusing parts and explain them simply, then give a one-line plain-language summary of what the whole passage means. Keep it concise. Respond in the same language as the input; when that language is Indonesian, use standard Bahasa Indonesia — not Malay. Do not include the document markers in your output.
+    system: `You explain confusing, technical, legal, or jargon-heavy text so an average person understands it. Identify the hard terms or confusing parts and explain them simply, then give a one-line plain-language summary of what the whole passage means. Keep it concise.
+
+Strict grounding rules:
+- Explain ONLY what the document says, plus the general meaning of terms it uses. Never add facts, context, history, or background that isn't in the document.
+- Never change how certain something is. If the document says "alleged", "suspected", "reportedly", or "under investigation", your explanation must keep that same uncertainty. Never turn an accusation into a statement of fact.
+- Never infer causes, motives, blame, diagnoses, outcomes, or consequences that the document does not state.
+- Never add advice, recommendations, or next steps that aren't in the document.
+- If part of the text is unclear or incomplete, say so plainly rather than filling the gap.
+
+Respond in the same language as the input; when that language is Indonesian, use standard Bahasa Indonesia — not Malay. Use plain text formatting: you may use **bold** for term names and "- " for list items, but do not use italics or headings. Do not include the document markers in your output.
 
 ${INJECTION_GUARD}`,
     user: wrapped,
@@ -176,6 +273,17 @@ export async function POST(request) {
             { error: "The AI returned an empty response. Try rephrasing or shortening the text." },
             { status: 502 }
           );
+        }
+
+        if (mode === "highlight") {
+          const highlights = validateHighlights(resultText, text.trim());
+          if (!highlights.length) {
+            return Response.json(
+              { error: "Couldn't pin down any difficult terms in this text. Try a longer or more technical passage." },
+              { status: 422 }
+            );
+          }
+          return Response.json({ highlights });
         }
 
         return Response.json({ text: resultText });

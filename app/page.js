@@ -89,6 +89,100 @@ function FormattedOutput({ text }) {
   return <>{blocks}</>;
 }
 
+// Text pasted from a web page carries navigation, ad blocks, and duplicated
+// caption lines. This strips the obvious noise so Highlight mode shows the
+// document rather than the page furniture. Deliberately conservative: it only
+// removes lines it is confident about, and never edits the words themselves.
+const NOISE_PATTERNS = [
+  /^bersponsor$/i,
+  /^sponsored$/i,
+  /^call to action icon$/i,
+  /^advertisement$/i,
+  /^iklan$/i,
+  /^konten bersponsor$/i,
+  /^baca juga:?/i,
+  /^lihat juga:?/i,
+  /^read more:?/i,
+  /^share$/i,
+  /^bagikan$/i,
+  /^lewati ke (konten|footer)/i,
+  /^skip to /i,
+  /^\d+(\.\d+)?k? (pengikut|followers)$/i,
+  /^(kunjungi|visit) /i,
+  /^(umpan balik|feedback|foto profil)$/i,
+  /^cerita dari /i,
+  /^expand article/i,
+  /^lanjutkan membaca$/i,
+];
+
+function looksLikeNoise(line) {
+  const t = line.trim();
+  if (!t) return false;
+  if (NOISE_PATTERNS.some((re) => re.test(t))) return true;
+  // Bare domain lines left behind by ad blocks, e.g. "hostinger.com".
+  if (/^[a-z0-9-]+\.(com|net|id|org|ai|co)(\s*·?)?$/i.test(t)) return true;
+  // A lone punctuation mark or bullet.
+  if (/^[·•—–-]$/.test(t)) return true;
+  return false;
+}
+
+function cleanPastedText(raw) {
+  const lines = raw.split("\n");
+  const kept = [];
+  let previous = null;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (looksLikeNoise(trimmed)) continue;
+
+    // Web pages often repeat an image caption immediately after itself.
+    if (trimmed && trimmed === previous) continue;
+
+    kept.push(line);
+    if (trimmed) previous = trimmed;
+  }
+
+  // Collapse runs of blank lines left behind by the removals.
+  return kept
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+// Renders the original text with validated difficult phrases marked up.
+// The text is never rewritten — segments are sliced from the original using
+// server-verified positions, so what's on screen is always the user's own words.
+function HighlightedText({ text, highlights, activeIndex, onSelect }) {
+  const segments = [];
+  let cursor = 0;
+
+  highlights.forEach((h, i) => {
+    if (h.start > cursor) {
+      segments.push(
+        <span key={`t-${i}`}>{text.slice(cursor, h.start)}</span>
+      );
+    }
+    segments.push(
+      <button
+        key={`h-${i}`}
+        className={`hl-mark ${activeIndex === i ? "active" : ""}`}
+        onClick={() => onSelect(activeIndex === i ? null : i)}
+        aria-expanded={activeIndex === i}
+      >
+        {text.slice(h.start, h.end)}
+      </button>
+    );
+    cursor = h.end;
+  });
+
+  if (cursor < text.length) {
+    segments.push(<span key="t-last">{text.slice(cursor)}</span>);
+  }
+
+  return <>{segments}</>;
+}
+
 export default function Home() {
   const [mode, setMode] = useState("simplify");
   const [level, setLevel] = useState("simple");
@@ -100,14 +194,28 @@ export default function Home() {
   const [error, setError] = useState("");
   const [showOutput, setShowOutput] = useState(false);
   const [sweepKey, setSweepKey] = useState(0);
+  const [highlights, setHighlights] = useState([]);
+  const [highlightedSource, setHighlightedSource] = useState("");
+  const [activeHighlight, setActiveHighlight] = useState(null);
+  const [cleanedChars, setCleanedChars] = useState(0);
   const textareaRef = useRef(null);
 
   async function handleProcess() {
-    const text = input.trim();
-    if (!text) {
+    const raw = input.trim();
+    if (!raw) {
       textareaRef.current?.focus();
       return;
     }
+
+    // Strip page furniture before anything else, so both the AI and the
+    // on-screen text work from the same cleaned document.
+    const text = cleanPastedText(raw);
+    if (!text) {
+      setError("There's no readable text here once the page clutter is removed.");
+      return;
+    }
+    setCleanedChars(raw.length - text.length);
+
     setError("");
     setLoading(true);
 
@@ -123,14 +231,24 @@ export default function Home() {
         throw new Error(data.error || "Request failed.");
       }
 
-      setOutputLabel(
-        mode === "simplify"
-          ? "Plain version"
-          : mode === "translate"
-          ? `In ${lang}`
-          : "Explained"
-      );
-      setOutput(data.text);
+      if (mode === "highlight") {
+        setHighlights(data.highlights || []);
+        setHighlightedSource(text);
+        setActiveHighlight(null);
+        setOutputLabel("What makes this hard");
+        setOutput("");
+      } else {
+        setHighlights([]);
+        setOutputLabel(
+          mode === "simplify"
+            ? "Plain version"
+            : mode === "translate"
+            ? `In ${lang}`
+            : "Explained"
+        );
+        setOutput(data.text);
+      }
+
       setShowOutput(true);
       setSweepKey((k) => k + 1);
     } catch (err) {
@@ -175,6 +293,7 @@ export default function Home() {
       <div className="tool">
         <div className="mode-tabs">
           {[
+            { id: "highlight", emoji: "🖍️", label: "Highlight" },
             { id: "simplify", emoji: "🧠", label: "Simplify" },
             { id: "translate", emoji: "🌐", label: "Translate" },
             { id: "explain", emoji: "🔎", label: "Explain" },
@@ -224,6 +343,9 @@ export default function Home() {
                 ))}
               </select>
             </>
+          )}
+          {mode === "highlight" && (
+            <span>Marks the hardest parts of your text — click any to see what it means.</span>
           )}
           {mode === "explain" && (
             <span>Explains jargon, acronyms & unfamiliar terms in plain words.</span>
@@ -279,16 +401,65 @@ export default function Home() {
           <div className="output-wrap">
             <div className="output-label">
               {outputLabel}
-              <button className="copy-btn" onClick={copyOutput}>
-                Copy
-              </button>
+              {cleanedChars > 40 && (
+                <span className="cleaned-note">
+                  {cleanedChars.toLocaleString()} chars of page clutter removed
+                </span>
+              )}
+              {mode !== "highlight" && (
+                <button className="copy-btn" onClick={copyOutput}>
+                  Copy
+                </button>
+              )}
             </div>
-            <div className="output-card">
-              <div key={sweepKey} className="sweep animate"></div>
-              <div className="output-text">
-                <FormattedOutput text={output} />
+
+            {mode === "highlight" ? (
+              <>
+                <div className="output-card">
+                  <div key={sweepKey} className="sweep animate"></div>
+                  <div className="output-text hl-source">
+                    <HighlightedText
+                      text={highlightedSource}
+                      highlights={highlights}
+                      activeIndex={activeHighlight}
+                      onSelect={setActiveHighlight}
+                    />
+                  </div>
+                </div>
+
+                {activeHighlight !== null && highlights[activeHighlight] ? (
+                  <div className="hl-panel">
+                    <div className="hl-panel-term">
+                      {highlights[activeHighlight].phrase}
+                    </div>
+                    <div className="hl-panel-body">
+                      {highlights[activeHighlight].explanation}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="hl-hint">
+                    {highlights.length} difficult {highlights.length === 1 ? "term" : "terms"} found — tap one to see what it means.
+                  </div>
+                )}
+
+                <button
+                  className="hl-next-action"
+                  onClick={() => {
+                    setMode("simplify");
+                    setShowOutput(false);
+                  }}
+                >
+                  Simplify the whole passage →
+                </button>
+              </>
+            ) : (
+              <div className="output-card">
+                <div key={sweepKey} className="sweep animate"></div>
+                <div className="output-text">
+                  <FormattedOutput text={output} />
+                </div>
               </div>
-            </div>
+            )}
           </div>
         )}
       </div>
