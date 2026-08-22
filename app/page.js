@@ -11,15 +11,98 @@ const EXAMPLES = {
     "The Lessee shall indemnify and hold harmless the Lessor from and against any and all claims, damages, losses, and expenses arising out of or resulting from the Lessee's failure to comply with the terms stipulated herein.",
 };
 
+// value = what the API is told; label = what the user sees.
 const LANGUAGES = [
-  "English",
-  "Indonesian",
-  "Spanish",
-  "French",
-  "Mandarin Chinese",
-  "Arabic",
-  "Japanese",
+  { value: "English", label: "English" },
+  { value: "Indonesian", label: "Bahasa Indonesia" },
+  { value: "Arabic", label: "العربية" },
+  { value: "German", label: "Deutsch" },
+  { value: "Spanish", label: "Español" },
+  { value: "French", label: "Français" },
+  { value: "Chinese (Simplified)", label: "简体中文" },
+  { value: "Chinese (Traditional)", label: "繁體中文" },
+  { value: "Japanese", label: "日本語" },
+  { value: "Korean", label: "한국어" },
 ];
+
+// Interface copy. Plainly is about removing language barriers, so the interface
+// itself shouldn't impose one.
+const UI = {
+  en: {
+    eyebrow: "Language, unblocked",
+    headlineA: "Complicated isn't",
+    headlineB: "your fault.",
+    sub: "Plainly turns tangled legal, bureaucratic, and medical language into sentences anyone can understand.",
+    modeHighlight: "Highlight",
+    modeSimplify: "Simplify",
+    modeTranslate: "Translate",
+    modeExplain: "Explain",
+    hintHighlight: "Marks the hardest parts of your text — click any to see what it means.",
+    hintExplain: "Explains jargon, acronyms & unfamiliar terms in plain words.",
+    levelLabel: "Level:",
+    levelSimple: "Simple",
+    levelVerySimple: "Very simple",
+    intoLabel: "Into:",
+    placeholder: "Paste complicated text here… for example a contract clause, an official letter, or a medical result.",
+    characters: "characters",
+    action: "Make it plain →",
+    tryLabel: "Try:",
+    exLegal: "Legal notice",
+    exMedical: "Medical result",
+    exContract: "Rental clause",
+    labelPlain: "Plain version",
+    labelExplained: "Explained",
+    labelHighlight: "What makes this hard",
+    labelIn: (l) => `In ${l}`,
+    copy: "Copy",
+    clutter: (n) => `${n} chars of page clutter removed`,
+    foundOne: "1 difficult term found — tap it to see what it means.",
+    foundMany: (n) => `${n} difficult terms found — tap one to see what it means.`,
+    nextAction: "Simplify the whole passage →",
+    emptyAfterClean: "There's no readable text here once the page clutter is removed.",
+    genericError: "Something went wrong: ",
+    tagline: "say it plainly",
+    footerLeft: "Built for NeuralSprint · Descend",
+    footerRight: "MVP prototype",
+  },
+  id: {
+    eyebrow: "Bahasa, tanpa penghalang",
+    headlineA: "Rumit itu bukan",
+    headlineB: "kesalahanmu.",
+    sub: "Plainly mengubah bahasa hukum, birokrasi, dan medis yang berbelit — jadi kalimat yang siapa saja bisa langsung mengerti.",
+    modeHighlight: "Sorot",
+    modeSimplify: "Sederhanakan",
+    modeTranslate: "Terjemahkan",
+    modeExplain: "Jelaskan",
+    hintHighlight: "Menandai bagian tersulit dari teksmu — klik untuk melihat artinya.",
+    hintExplain: "Menjelaskan jargon, singkatan, dan istilah asing dengan bahasa sederhana.",
+    levelLabel: "Tingkat:",
+    levelSimple: "Sederhana",
+    levelVerySimple: "Sangat sederhana",
+    intoLabel: "Ke:",
+    placeholder: "Tempel teks rumit di sini… misalnya klausul kontrak, surat resmi, atau hasil pemeriksaan medis.",
+    characters: "karakter",
+    action: "Buat jadi jelas →",
+    tryLabel: "Coba:",
+    exLegal: "Surat resmi",
+    exMedical: "Hasil medis",
+    exContract: "Klausul sewa",
+    labelPlain: "Versi sederhana",
+    labelExplained: "Penjelasan",
+    labelHighlight: "Yang membuat ini sulit",
+    labelIn: (l) => `Dalam ${l}`,
+    copy: "Salin",
+    clutter: (n) => `${n} karakter sampah halaman dibuang`,
+    foundOne: "1 istilah sulit ditemukan — ketuk untuk melihat artinya.",
+    foundMany: (n) => `${n} istilah sulit ditemukan — ketuk salah satu untuk melihat artinya.`,
+    nextAction: "Sederhanakan seluruh teks →",
+    emptyAfterClean: "Tidak ada teks yang bisa dibaca setelah sampah halaman dibuang.",
+    genericError: "Terjadi kesalahan: ",
+    tagline: "say it plainly",
+    footerLeft: "Dibuat untuk NeuralSprint · Descend",
+    footerRight: "Prototipe MVP",
+  },
+};
 
 // Renders the light markdown the model tends to produce (headings, bold,
 // bullets, dividers) without pulling in a markdown library.
@@ -189,7 +272,8 @@ export default function Home() {
   const [lang, setLang] = useState("English");
   const [input, setInput] = useState("");
   const [output, setOutput] = useState("");
-  const [outputLabel, setOutputLabel] = useState("Plain version");
+  const [resultMode, setResultMode] = useState("simplify");
+  const [resultLang, setResultLang] = useState("English");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [showOutput, setShowOutput] = useState(false);
@@ -198,6 +282,8 @@ export default function Home() {
   const [highlightedSource, setHighlightedSource] = useState("");
   const [activeHighlight, setActiveHighlight] = useState(null);
   const [cleanedChars, setCleanedChars] = useState(0);
+  const [uiLang, setUiLang] = useState("en");
+  const t = UI[uiLang];
   const textareaRef = useRef(null);
 
   async function handleProcess() {
@@ -211,7 +297,7 @@ export default function Home() {
     // on-screen text work from the same cleaned document.
     const text = cleanPastedText(raw);
     if (!text) {
-      setError("There's no readable text here once the page clutter is removed.");
+      setError(t.emptyAfterClean);
       return;
     }
     setCleanedChars(raw.length - text.length);
@@ -231,32 +317,36 @@ export default function Home() {
         throw new Error(data.error || "Request failed.");
       }
 
+      setResultMode(mode);
+      setResultLang(lang);
+
       if (mode === "highlight") {
         setHighlights(data.highlights || []);
         setHighlightedSource(text);
         setActiveHighlight(null);
-        setOutputLabel("What makes this hard");
         setOutput("");
       } else {
         setHighlights([]);
-        setOutputLabel(
-          mode === "simplify"
-            ? "Plain version"
-            : mode === "translate"
-            ? `In ${lang}`
-            : "Explained"
-        );
         setOutput(data.text);
       }
 
       setShowOutput(true);
       setSweepKey((k) => k + 1);
     } catch (err) {
-      setError("Something went wrong: " + err.message + ". Please try again.");
+      setError(t.genericError + err.message);
     } finally {
       setLoading(false);
     }
   }
+
+  const outputLabel =
+    resultMode === "highlight"
+      ? t.labelHighlight
+      : resultMode === "simplify"
+      ? t.labelPlain
+      : resultMode === "translate"
+      ? t.labelIn(LANGUAGES.find((l) => l.value === resultLang)?.label || resultLang)
+      : t.labelExplained;
 
   function handleKeyDown(e) {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -274,29 +364,44 @@ export default function Home() {
         <div className="logo">
           <span className="logo-mark"></span>Plainly
         </div>
-        <div className="tagline-small">say it plainly</div>
+        <div className="header-right">
+          <div className="ui-lang-toggle">
+            <button
+              className={`ui-lang-opt ${uiLang === "en" ? "active" : ""}`}
+              onClick={() => setUiLang("en")}
+              aria-pressed={uiLang === "en"}
+            >
+              EN
+            </button>
+            <button
+              className={`ui-lang-opt ${uiLang === "id" ? "active" : ""}`}
+              onClick={() => setUiLang("id")}
+              aria-pressed={uiLang === "id"}
+            >
+              ID
+            </button>
+          </div>
+          <div className="tagline-small">{t.tagline}</div>
+        </div>
       </header>
 
       <div className="hero">
-        <p className="eyebrow">Language, unblocked</p>
+        <p className="eyebrow">{t.eyebrow}</p>
         <h1>
-          Rumit itu bukan
+          {t.headlineA}
           <br />
-          <span className="mark">kesalahanmu.</span>
+          <span className="mark">{t.headlineB}</span>
         </h1>
-        <p className="sub">
-          Plainly mengubah bahasa hukum, birokrasi, dan medis yang berbelit —
-          jadi kalimat yang siapa saja bisa langsung mengerti.
-        </p>
+        <p className="sub">{t.sub}</p>
       </div>
 
       <div className="tool">
         <div className="mode-tabs">
           {[
-            { id: "highlight", emoji: "🖍️", label: "Highlight" },
-            { id: "simplify", emoji: "🧠", label: "Simplify" },
-            { id: "translate", emoji: "🌐", label: "Translate" },
-            { id: "explain", emoji: "🔎", label: "Explain" },
+            { id: "highlight", emoji: "🖍️", label: t.modeHighlight },
+            { id: "simplify", emoji: "🧠", label: t.modeSimplify },
+            { id: "translate", emoji: "🌐", label: t.modeTranslate },
+            { id: "explain", emoji: "🔎", label: t.modeExplain },
           ].map((m) => (
             <button
               key={m.id}
@@ -311,45 +416,41 @@ export default function Home() {
         <div className="sub-controls">
           {mode === "simplify" && (
             <>
-              <span>Level:</span>
+              <span>{t.levelLabel}</span>
               <div className="pill-select">
                 <button
                   className={`pill-opt ${level === "simple" ? "active" : ""}`}
                   onClick={() => setLevel("simple")}
                 >
-                  Simple
+                  {t.levelSimple}
                 </button>
                 <button
                   className={`pill-opt ${level === "very_simple" ? "active" : ""}`}
                   onClick={() => setLevel("very_simple")}
                 >
-                  Very simple
+                  {t.levelVerySimple}
                 </button>
               </div>
             </>
           )}
           {mode === "translate" && (
             <>
-              <span>Into:</span>
+              <span>{t.intoLabel}</span>
               <select
                 className="lang-select"
                 value={lang}
                 onChange={(e) => setLang(e.target.value)}
               >
                 {LANGUAGES.map((l) => (
-                  <option key={l} value={l}>
-                    {l === "Indonesian" ? "Bahasa Indonesia" : l}
+                  <option key={l.value} value={l.value}>
+                    {l.label}
                   </option>
                 ))}
               </select>
             </>
           )}
-          {mode === "highlight" && (
-            <span>Marks the hardest parts of your text — click any to see what it means.</span>
-          )}
-          {mode === "explain" && (
-            <span>Explains jargon, acronyms & unfamiliar terms in plain words.</span>
-          )}
+          {mode === "highlight" && <span>{t.hintHighlight}</span>}
+          {mode === "explain" && <span>{t.hintExplain}</span>}
         </div>
 
         <div className="panel">
@@ -358,11 +459,11 @@ export default function Home() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Tempel kalimat rumit di sini... contoh: 'Permohonan yang tidak memenuhi persyaratan administratif sebagaimana dimaksud pada Pasal 7 ayat (2) dinyatakan tidak dapat diproses.'"
+            placeholder={t.placeholder}
           />
           <div className="panel-footer">
             <span className="char-count">
-              {input.length} character{input.length === 1 ? "" : "s"}
+              {input.length.toLocaleString()} {t.characters}
             </span>
             <button
               className="go-btn"
@@ -372,14 +473,14 @@ export default function Home() {
               {loading ? (
                 <span className="spinner"></span>
               ) : (
-                <span>Make it plain →</span>
+                <span>{t.action}</span>
               )}
             </button>
           </div>
         </div>
 
         <div className="examples">
-          <span className="examples-label">Try:</span>
+          <span className="examples-label">{t.tryLabel}</span>
           {Object.entries(EXAMPLES).map(([key, text]) => (
             <button
               key={key}
@@ -387,10 +488,10 @@ export default function Home() {
               onClick={() => setInput(text)}
             >
               {key === "legal"
-                ? "Legal notice"
+                ? t.exLegal
                 : key === "medical"
-                ? "Medical result"
-                : "Rental clause"}
+                ? t.exMedical
+                : t.exContract}
             </button>
           ))}
         </div>
@@ -403,17 +504,17 @@ export default function Home() {
               {outputLabel}
               {cleanedChars > 40 && (
                 <span className="cleaned-note">
-                  {cleanedChars.toLocaleString()} chars of page clutter removed
+                  {t.clutter(cleanedChars.toLocaleString())}
                 </span>
               )}
-              {mode !== "highlight" && (
+              {resultMode !== "highlight" && (
                 <button className="copy-btn" onClick={copyOutput}>
-                  Copy
+                  {t.copy}
                 </button>
               )}
             </div>
 
-            {mode === "highlight" ? (
+            {resultMode === "highlight" ? (
               <>
                 <div className="output-card">
                   <div key={sweepKey} className="sweep animate"></div>
@@ -438,7 +539,9 @@ export default function Home() {
                   </div>
                 ) : (
                   <div className="hl-hint">
-                    {highlights.length} difficult {highlights.length === 1 ? "term" : "terms"} found — tap one to see what it means.
+                    {highlights.length === 1
+                      ? t.foundOne
+                      : t.foundMany(highlights.length)}
                   </div>
                 )}
 
@@ -449,7 +552,7 @@ export default function Home() {
                     setShowOutput(false);
                   }}
                 >
-                  Simplify the whole passage →
+                  {t.nextAction}
                 </button>
               </>
             ) : (
@@ -465,8 +568,8 @@ export default function Home() {
       </div>
 
       <footer>
-        <span>Built for NeuralSprint · Descend</span>
-        <span>MVP prototype</span>
+        <span>{t.footerLeft}</span>
+        <span>{t.footerRight}</span>
       </footer>
     </div>
   );

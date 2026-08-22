@@ -62,6 +62,37 @@ header{
   letter-spacing: 0.02em;
 }
 
+.header-right{
+  display:flex;
+  align-items:center;
+  gap: 14px;
+}
+
+.ui-lang-toggle{
+  display:flex;
+  background: var(--paper-dim);
+  padding: 3px;
+  border-radius: 999px;
+}
+.ui-lang-opt{
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: none;
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+.ui-lang-opt.active{
+  background: var(--ink);
+  color: var(--paper);
+}
+.ui-lang-opt:not(.active):hover{ color: var(--ink); }
+
 .hero{
   padding: 28px 0 36px;
   border-bottom: 1px solid var(--line);
@@ -500,5 +531,11 @@ footer{
 @media (max-width: 560px){
   h1{ font-size: 30px; }
   .sub{ font-size: 16px; }
-  header{ flex-direction: column; align-items:flex-start; gap: 6px; }
+  header{
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .header-right .tagline-small{ display: none; }
 }

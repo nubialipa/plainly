@@ -1,17 +1,27 @@
 // Uses the Google Gemini API free tier.
 // Create an API key at https://aistudio.google.com/apikey
-const GEMINI_MODEL = "gemini-3.6-flash";
+// Model fallback chain. If the first model is out of daily quota (or not
+// available on this account), the next one is tried. Free-tier quotas are
+// per-project and per-model, so a second model is a second allowance.
+const MODEL_CHAIN = [
+  "gemini-3.6-flash",
+  "gemini-3.6-flash-lite",
+  "gemini-2.5-flash-lite",
+];
 
 const VALID_MODES = ["simplify", "translate", "explain", "highlight"];
 const VALID_LEVELS = ["simple", "very_simple"];
 const VALID_LANGS = [
   "English",
   "Indonesian",
+  "Arabic",
+  "German",
   "Spanish",
   "French",
-  "Mandarin Chinese",
-  "Arabic",
+  "Chinese (Simplified)",
+  "Chinese (Traditional)",
   "Japanese",
+  "Korean",
 ];
 
 // --- Simple in-memory rate limiter -----------------------------------------
@@ -240,20 +250,27 @@ export async function POST(request) {
 
   const { system, user } = buildPrompt(mode, level, lang, text.trim());
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
   const payload = JSON.stringify({
     systemInstruction: { parts: [{ text: system }] },
     contents: [{ role: "user", parts: [{ text: user }] }],
     generationConfig: { maxOutputTokens: 4000 },
   });
 
-  // Gemini's free tier occasionally returns 503 (overloaded) or 429 (rate
-  // limited). Both are transient, so retry a couple of times with a short
-  // backoff before giving up — a demo shouldn't fail on a blip.
-  const MAX_ATTEMPTS = 3;
-  let lastStatus = null;
+  // A 429 can mean two very different things:
+  //   - per-minute throttling → worth retrying after a short pause
+  //   - daily quota exhausted → retrying is pointless until the quota resets,
+  //     so move to the next model instead of burning time on backoff.
+  function isDailyQuotaExhausted(errText) {
+    return (
+      /RESOURCE_EXHAUSTED/i.test(errText) &&
+      /PerDay|per day|daily/i.test(errText)
+    );
+  }
 
-  try {
+  async function callModel(model) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+    const MAX_ATTEMPTS = 3;
+
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       const res = await fetch(url, {
         method: "POST",
@@ -261,9 +278,40 @@ export async function POST(request) {
         body: payload,
       });
 
-      if (res.ok) {
-        const data = await res.json();
-        const resultText = (data.candidates?.[0]?.content?.parts || [])
+      if (res.ok) return { ok: true, data: await res.json() };
+
+      const errText = await res.text();
+      console.error(
+        `[plainly] ${model} error ${res.status} (attempt ${attempt}/${MAX_ATTEMPTS}):`,
+        errText.slice(0, 400)
+      );
+
+      // Out of daily quota, or the model isn't available to this account:
+      // fail fast so the next model in the chain gets its turn.
+      if (res.status === 404 || isDailyQuotaExhausted(errText)) {
+        return { ok: false, exhausted: true, status: res.status };
+      }
+
+      const isTransient = res.status === 503 || res.status === 429 || res.status >= 500;
+      if (!isTransient || attempt === MAX_ATTEMPTS) {
+        return { ok: false, exhausted: false, status: res.status };
+      }
+
+      await new Promise((r) => setTimeout(r, attempt === 1 ? 600 : 1400));
+    }
+
+    return { ok: false, exhausted: false, status: null };
+  }
+
+  try {
+    let lastStatus = null;
+    let allExhausted = true;
+
+    for (const model of MODEL_CHAIN) {
+      const result = await callModel(model);
+
+      if (result.ok) {
+        const resultText = (result.data.candidates?.[0]?.content?.parts || [])
           .map((p) => p.text || "")
           .join("\n")
           .trim();
@@ -289,23 +337,16 @@ export async function POST(request) {
         return Response.json({ text: resultText });
       }
 
-      lastStatus = res.status;
-      const errText = await res.text();
-      console.error(`[plainly] Gemini API error ${res.status} (attempt ${attempt}/${MAX_ATTEMPTS}):`, errText);
-
-      const isTransient = res.status === 503 || res.status === 429 || res.status >= 500;
-      if (!isTransient || attempt === MAX_ATTEMPTS) break;
-
-      // Wait a bit longer between each attempt: 600ms, then 1400ms.
-      await new Promise((r) => setTimeout(r, attempt === 1 ? 600 : 1400));
+      lastStatus = result.status;
+      if (!result.exhausted) allExhausted = false;
+      // Exhausted or failed → try the next model in the chain.
     }
 
-    const message =
-      lastStatus === 503 || lastStatus === 429
-        ? "The AI service is busy right now. Please try again in a few seconds."
-        : "The AI service is temporarily unavailable. Please try again in a moment.";
+    const message = allExhausted
+      ? "Today's free AI quota is used up. It resets at midnight Pacific time — please try again later."
+      : "The AI service is busy right now. Please try again in a few seconds.";
 
-    return Response.json({ error: message }, { status: 502 });
+    return Response.json({ error: message }, { status: allExhausted ? 429 : 502 });
   } catch (err) {
     console.error("[plainly] Unexpected server error:", err);
     return Response.json({ error: "Something went wrong on our end. Please try again." }, { status: 500 });
