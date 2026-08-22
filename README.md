@@ -1,75 +1,159 @@
 # Plainly
 
-AI yang mengubah bahasa hukum, birokrasi, dan medis yang rumit jadi kalimat yang
-mudah dipahami. Tiga mode: **Simplify**, **Translate**, **Explain**.
+**A comprehension layer for complicated language.**
 
-Dibuat untuk hackathon NeuralSprint (Devpost).
+Plainly helps people understand legal, bureaucratic, and medical documents —
+without rewriting the meaning out of them.
 
-## Arsitektur
+[**Live demo**](https://plainly-sepia.vercel.app) · Built for the NeuralSprint
+hackathon
+
+![Plainly](screenshot.png)
+
+---
+
+## The problem
+
+Every day people receive documents that decide something about their lives — a
+rejection letter, a lease clause, a lab result, a court notice. The information
+is public and legally theirs. The language is not.
+
+So people sign things they don't understand, miss deadlines they didn't see, and
+walk away from processes they were entitled to complete. The barrier isn't
+literacy. It's jargon.
+
+## Why Plainly works differently
+
+Most AI writing tools take your document and hand you a different one. That's
+fine for a blog post. It's dangerous for a legal notice — a "simpler" version
+that quietly drops a deadline or softens an obligation is worse than no help at
+all.
+
+Plainly's starting point is the opposite:
+
+> **Keep the original document intact. Help the reader meet it where it's hard.**
+
+That single decision shaped everything else in the product.
+
+## Four ways to understand a document
+
+| Mode | What it does |
+|---|---|
+| **Highlight** | Marks the 3–6 hardest phrases in your text — jargon, acronyms, institutional abbreviations. Your document is not rewritten. Click any mark for a plain explanation. |
+| **Simplify** | Rewrites the whole passage in everyday language, with strict rules about what must survive unchanged. |
+| **Translate** | Ten languages, translated into natural plain language rather than literal equivalents. |
+| **Explain** | Unpacks the jargon and gives a one-line summary of what the passage actually says. |
+
+## The interface language is a signal, not decoration
+
+The EN / ID toggle doesn't just relabel buttons. It tells Plainly which language
+the reader actually understands, and every answer follows it.
+
+An expatriate in Indonesia can set the interface to English, paste an Indonesian
+government letter, and get English explanations of Indonesian terms. The
+highlighted phrases stay in the original — they have to, they're the reader's own
+document — but everything Plainly says *about* them arrives in the reader's
+language.
+
+## Engineering decisions
+
+**AI calls happen server-side.**
+The browser sends only `mode`, `level`, `lang`, `text`, and `uiLang`. Prompts are
+built on the server and the API key never reaches the client. A user can't
+substitute their own system prompt by editing a request.
+
+**The server decides where highlights go, not the model.**
+The model proposes phrases; the server searches the original text for each one
+and computes the position itself. A phrase the model invented or altered simply
+gets dropped. Overlapping ranges are rejected. The original text is never
+adjusted to accommodate the model.
+
+**Simplification has explicit preservation rules.**
+The prompt requires every number, date, deadline, obligation, prohibition,
+condition, and named entity to survive exactly as written — and requires
+ambiguity in the source to stay ambiguous rather than being resolved by guess.
+
+**Explanations are grounded.**
+Explain mode is instructed never to add facts the document doesn't contain, and
+never to change how certain something is. An allegation stays an allegation.
+
+**Pasted text is cleaned before processing.**
+Real users copy whole web pages. Plainly strips duplicated captions, sponsor
+markers, and navigation leftovers before anything is sent to the model — and
+tells the reader how much was removed.
+
+**Model fallback and quota-aware retries.**
+Transient 503s are retried with backoff. Daily quota exhaustion is detected
+separately and fails over to the next model in the chain instead of retrying
+pointlessly.
+
+**No database.**
+Nothing is stored, so there's nothing to leak. An MVP that processes documents
+people consider private is better off holding none of them.
+
+## Tech stack
+
+- **Framework:** Next.js 14 (App Router), React 18
+- **AI:** Google Gemini
+- **Styling:** hand-written CSS, no UI framework
+- **Hosting:** Vercel
+- **Dependencies beyond Next and React:** none
+
+## Limitations
+
+Plainly uses generative AI and can produce explanations that are wrong or
+overconfident. It is a comprehension aid, not a substitute for a lawyer, doctor,
+or official interpretation.
+
+Known gaps in this MVP:
+
+- Instructions embedded in a pasted document are handled with prompt guarding,
+  but prompt injection through document content is not fully solved.
+- Rate limiting is in-memory and per-instance, which slows casual abuse but is
+  not a substitute for a shared store.
+- No PDF or scanned-document input yet — text must be pasted.
+- No automated test suite.
+
+## Running locally
+
+```bash
+npm install
+cp .env.local.example .env.local     # Windows: copy .env.local.example .env.local
+```
+
+Create an API key at [Google AI Studio](https://aistudio.google.com/apikey) and
+put it in `.env.local` as `GEMINI_API_KEY`, then:
+
+```bash
+npm run dev
+```
+
+Open http://localhost:3000.
+
+Never commit `.env.local` — it's already in `.gitignore`.
+
+## Deploying
+
+Push to GitHub, import the repository at [vercel.com](https://vercel.com), and
+add `GEMINI_API_KEY` under **Environment Variables** before deploying. Changing
+an environment variable later requires a redeploy to take effect.
+
+## Project structure
 
 ```
-Browser (React UI)
-      ↓
-/api/plainly   (Next.js Route Handler, jalan di server)
-      ↓
-Google Gemini API (gemini-2.5-flash, free tier)
-      (API key hanya ada di server, tidak pernah dikirim ke browser)
+app/
+  page.js                  interface, highlight rendering, paste cleanup
+  globals.css              design system
+  layout.js                fonts and metadata
+  api/plainly/route.js     prompts, validation, rate limiting, model fallback
 ```
 
-Menggunakan **Gemini API free tier**. Ketersediaan model, limit request, dan
-syarat penggunaannya mengikuti kebijakan Google yang berlaku dan bisa berubah —
-cek kondisi aktif untuk project kamu langsung di
-[Google AI Studio](https://aistudio.google.com).
+## What's next
 
-## Menjalankan di komputer sendiri
+- Structured document input (PDF, images with OCR)
+- Side-by-side original and simplified view
+- Saved glossaries for recurring institutional jargon
 
-1. Install dependencies:
-   ```
-   npm install
-   ```
-2. Copy file environment variable:
-   ```
-   # macOS / Linux
-   cp .env.local.example .env.local
+## License
 
-   # Windows (Command Prompt)
-   copy .env.local.example .env.local
-   ```
-3. Buka https://aistudio.google.com/apikey, login dengan akun Google, klik
-   **Create API key**. Copy key-nya ke `.env.local`
-   pada baris `GEMINI_API_KEY=`.
-4. Jalankan:
-   ```
-   npm run dev
-   ```
-5. Buka http://localhost:3000
-
-## Deploy ke Vercel
-
-1. Push folder ini ke repo GitHub baru.
-2. Buka https://vercel.com → **New Project** → pilih repo tadi.
-3. Saat konfigurasi, buka bagian **Environment Variables**, tambahkan:
-   - Key: `GEMINI_API_KEY`
-   - Value: API key Gemini kamu (dari aistudio.google.com/apikey)
-4. Klik **Deploy**. Setelah selesai, kamu dapat URL publik (contoh:
-   `plainly.vercel.app`) yang bisa dipakai untuk submission Devpost.
-
-⚠️ **Jangan pernah commit `.env.local` atau API key ke GitHub.** File `.gitignore`
-di project ini sudah menyertakan `.env.local` supaya aman.
-
-⚠️ **Privasi:** Jangan masukkan data pribadi atau dokumen sensitif asli selama
-testing — gunakan contoh teks umum seperti yang sudah tersedia di tombol "Try".
-Untuk penanganan data oleh provider, rujuk ke kebijakan Google yang berlaku.
-
-## Struktur file penting
-
-- `app/page.js` — UI utama (client component)
-- `app/api/plainly/route.js` — endpoint server yang membentuk prompt dan memanggil Gemini API
-- `app/globals.css` — semua styling/design system
-- `app/layout.js` — root layout + font
-
-## Roadmap berikutnya
-
-- [ ] Upload PDF / paste teks panjang → ekstrak teks
-- [ ] Highlight kata/istilah sulit langsung di teks asli (klik untuk lihat penjelasan)
-- [ ] Rate limiting sederhana di API route (opsional, biar tidak disalahgunakan)
+MIT
